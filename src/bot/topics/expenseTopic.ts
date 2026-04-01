@@ -34,6 +34,56 @@ async function saveMonthConfig(month: string, config: any) {
   }
 }
 
+function isValidPastOrToday(dateStr: string): boolean {
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return false;
+  const day = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1; // 0-indexed
+  let year = parseInt(parts[2], 10);
+  if (year < 100) year += 2000;
+
+  const inputDate = new Date(year, month, day);
+  if (inputDate.getDate() !== day || inputDate.getMonth() !== month || inputDate.getFullYear() !== year) {
+    return false;
+  }
+
+  // Lấy ngày hiện tại theo giờ Việt Nam (UTC+7)
+  const now = new Date();
+  const vnTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
+  const today = new Date(vnTime.getUTCFullYear(), vnTime.getUTCMonth(), vnTime.getUTCDate());
+  today.setHours(0, 0, 0, 0);
+
+  return inputDate.getTime() <= today.getTime();
+}
+
+function parseAmount(input: string): { displayAmount: string, sheetAmount: number } {
+  let str = input.trim().toLowerCase();
+  let isUSD = str.includes('$') || str.includes('usd');
+
+  let numStr = str.replace(/[^\d.,]/g, '');
+  let value = 0;
+
+  if (isUSD) {
+    numStr = numStr.replace(',', '.');
+    value = parseFloat(numStr);
+    if (isNaN(value)) value = 0;
+
+    return {
+      displayAmount: `$${value}`,
+      sheetAmount: value * 26500
+    };
+  } else {
+    numStr = numStr.replace(/[.,]/g, '');
+    value = parseInt(numStr, 10);
+    if (isNaN(value)) value = 0;
+
+    return {
+      displayAmount: `${new Intl.NumberFormat('vi-VN').format(value)} vnd`,
+      sheetAmount: value
+    };
+  }
+}
+
 const STATES = {
   IDLE: 'IDLE',
   AWAITING_COST_TYPE: 'AWAITING_COST_TYPE',
@@ -85,12 +135,13 @@ const showEditMenu = async (chatId: number, userId: number, session: SessionData
   const lastExp = lastUserExpense.get(userId);
   if (!lastExp) return;
   const d = lastExp.data;
+  const displayAmt = d.displayAmount || new Intl.NumberFormat('vi-VN').format(Number(d.amount)) + ' vnd';
   const msg = `📝 **SỬA THÔNG TIN CHI PHÍ**\n\n` +
     `**Tháng:** ${lastExp.month}\n` +
     `**Loại:** ${lastExp.costType}\n` +
     `**Ngày:** ${d.date}\n` +
     `**Hạng mục:** ${d.category}\n` +
-    `**Số tiền:** ${d.amount}\n` +
+    `**Số tiền:** ${displayAmt}\n` +
     `**Đơn vị:** ${d.unit}\n` +
     `**Người TT:** ${d.payer}\n` +
     `**Ghi chú:** ${d.notes || 'Không có'}\n\n` +
@@ -327,6 +378,14 @@ export async function initExpenseTopic() {
       return;
     }
 
+    if (data === 'CMD_DONE_PHOTOS') {
+      if (session.state === STATES.AWAITING_RECEIPT) {
+        session.state = STATES.AWAITING_NOTES;
+        await sendMsg("Nhập Ghi chú (Hoặc gõ /skip để bỏ qua):");
+      }
+      return;
+    }
+
     if (data === 'CMD_MANAGE_SHEET_LIST') {
       session.state = STATES.IDLE;
       const availableMonths = Array.from(monthSheetConfig.keys());
@@ -386,7 +445,8 @@ export async function initExpenseTopic() {
             const keyboard = recentExpenses.map((exp: any, index: number) => {
               // exp should have: id, date, category, amount, costType
               const shortCat = exp.category.length > 15 ? exp.category.substring(0, 15) + '...' : exp.category;
-              return [{ text: `[${exp.date}] ${shortCat} - ${exp.amount}`, callback_data: `CMD_VIEW_EXP_${index}` }];
+              const displayAmt = exp.displayAmount || new Intl.NumberFormat('vi-VN').format(Number(exp.amount));
+              return [{ text: `[${exp.date}] ${shortCat} - ${displayAmt}`, callback_data: `CMD_VIEW_EXP_${index}` }];
             });
             keyboard.push([{ text: "🔙 Trở lại", callback_data: "CMD_MANAGE_SHEET_LIST" }]);
 
@@ -425,8 +485,9 @@ export async function initExpenseTopic() {
 
       const msgText = `🧾 **CHI TIẾT GIAO DỊCH**\n\n` +
         `📅 Ngày: ${exp.date}\n` +
+        `Loại: ${exp.costType}\n` +
         `🏷 Hạng mục: ${exp.category}\n` +
-        `💵 Số tiền: ${exp.amount} ${exp.unit || ''}\n` +
+        `💵 Số tiền: ${exp.displayAmount || new Intl.NumberFormat('vi-VN').format(Number(exp.amount)) + ' vnd'} ${exp.unit || ''}\n` +
         `👤 Người chi: ${exp.payer || ''}\n` +
         `📝 Ghi chú: ${exp.notes || 'Không có'}\n\n` +
         `Bạn muốn làm gì với giao dịch này?`;
@@ -466,8 +527,9 @@ export async function initExpenseTopic() {
 
       const msgText = `🧾 **CHI TIẾT GIAO DỊCH**\n\n` +
         `📅 Ngày: ${exp.date}\n` +
+        `Loại: ${exp.costType}\n` +
         `🏷 Hạng mục: ${exp.category}\n` +
-        `💵 Số tiền: ${exp.amount} ${exp.unit || ''}\n` +
+        `💵 Số tiền: ${exp.displayAmount || new Intl.NumberFormat('vi-VN').format(Number(exp.amount)) + ' vnd'} ${exp.unit || ''}\n` +
         `👤 Người chi: ${exp.payer || ''}\n` +
         `📝 Ghi chú: ${exp.notes || 'Không có'}\n\n` +
         `Bạn muốn làm gì với giao dịch này?`;
@@ -588,7 +650,38 @@ export async function initExpenseTopic() {
         'NOTES': 'Ghi chú'
       };
 
-      await sendMsg(`Nhập giá trị mới cho **${fieldNames[field]}**:`, { parse_mode: 'Markdown' });
+      if (field === 'DATE') {
+        const now = new Date();
+        const vnTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
+        const todayStr = `${vnTime.getUTCDate().toString().padStart(2, '0')}/${(vnTime.getUTCMonth() + 1).toString().padStart(2, '0')}/${vnTime.getUTCFullYear().toString().slice(-2)}`;
+
+        await sendMsg(`Nhập giá trị mới cho **${fieldNames[field]}** hoặc chọn Hôm nay:`, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: `📅 Hôm nay (${todayStr})`, callback_data: `CMD_USE_TODAY_EDIT_DATE_${todayStr}` }]
+            ]
+          }
+        });
+      } else {
+        await sendMsg(`Nhập giá trị mới cho **${fieldNames[field]}**:`, { parse_mode: 'Markdown' });
+      }
+      return;
+    }
+
+    if (session.state === 'AWAITING_EDIT_DATE' && data.startsWith('CMD_USE_TODAY_EDIT_DATE_')) {
+      const dateStr = data.replace('CMD_USE_TODAY_EDIT_DATE_', '');
+      // We simulate the user typing the date
+      bot!.processUpdate({
+        update_id: 0,
+        message: {
+          message_id: 0,
+          from: query.from,
+          chat: query.message!.chat,
+          date: Math.floor(Date.now() / 1000),
+          text: dateStr
+        }
+      });
       return;
     }
 
@@ -623,15 +716,12 @@ export async function initExpenseTopic() {
 
             if (allowedTopic.chatId && allowedTopic.threadId) {
               const groupMsg = `🗑️ **XÓA CHI PHÍ** (bởi ${query.from.first_name})\n\n` +
-                `Đã xóa giao dịch: ${lastExp.data.category} - ${lastExp.data.amount}`;
+                `Đã xóa giao dịch: ${lastExp.data.category} - ${lastExp.data.displayAmount || lastExp.data.amount}`;
               try {
-                const sentMsg = await bot!.sendMessage(allowedTopic.chatId, groupMsg, {
+                await bot!.sendMessage(allowedTopic.chatId, groupMsg, {
                   message_thread_id: allowedTopic.threadId,
                   parse_mode: 'Markdown'
                 });
-                setTimeout(() => {
-                  bot!.deleteMessage(allowedTopic.chatId, sentMsg.message_id).catch(console.error);
-                }, 15000);
               } catch (e) {
                 console.error("Could not send group notification", e);
               }
@@ -693,9 +783,28 @@ export async function initExpenseTopic() {
     if (session.state === STATES.AWAITING_MONTH && data.startsWith('MONTH_')) {
       session.data.month = data.replace('MONTH_', '');
       session.state = STATES.AWAITING_DATE;
-      await sendMsg(`Đã chọn tháng: **${session.data.month}**\nNhập Ngày thanh toán (VD: 15/03/26):`, {
-        parse_mode: 'Markdown'
+
+      // Lấy ngày hiện tại theo giờ Việt Nam (UTC+7)
+      const now = new Date();
+      const vnTime = new Date(now.getTime() + (7 * 60 * 60 * 1000));
+      const todayStr = `${vnTime.getUTCDate().toString().padStart(2, '0')}/${(vnTime.getUTCMonth() + 1).toString().padStart(2, '0')}/${vnTime.getUTCFullYear().toString().slice(-2)}`;
+
+      await sendMsg(`Đã chọn tháng: **${session.data.month}**\nNhập Ngày thanh toán (VD: 15/03/26) hoặc chọn Hôm nay:`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: `📅 Hôm nay (${todayStr})`, callback_data: `CMD_USE_TODAY_DATE_${todayStr}` }]
+          ]
+        }
       });
+      return;
+    }
+
+    if (session.state === STATES.AWAITING_DATE && data.startsWith('CMD_USE_TODAY_DATE_')) {
+      const dateStr = data.replace('CMD_USE_TODAY_DATE_', '');
+      session.data.date = dateStr;
+      session.state = STATES.AWAITING_CATEGORY;
+      await sendMsg("Nhập Hạng mục thanh toán (Bắt buộc):");
       return;
     }
   });
@@ -874,7 +983,7 @@ export async function initExpenseTopic() {
       return;
     }
 
-    if (command === '/menu' || command === '/start') {
+    if (command === '/expense_menu' || command === '/start') {
       if (allowedTopic.chatId && allowedTopic.threadId && msg.chat.type !== 'private') {
         if (msg.chat.id !== allowedTopic.chatId || msg.message_thread_id !== allowedTopic.threadId) {
           await sendMsg("⚠️ Vui lòng vào đúng Topic đã được chỉ định để sử dụng Bot.");
@@ -894,9 +1003,15 @@ export async function initExpenseTopic() {
 
         if (!newValue) return;
 
-        if (field === 'DATE' && !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(newValue)) {
-          await sendMsg("Sai định dạng ngày. Vui lòng nhập lại (VD: 15/03/26):");
-          return;
+        if (field === 'DATE') {
+          if (!/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(newValue)) {
+            await sendMsg("Sai định dạng ngày. Vui lòng nhập lại (VD: 15/03/2026):");
+            return;
+          }
+          if (!isValidPastOrToday(newValue)) {
+            await sendMsg("Không được nhập ngày tương lai. Vui lòng nhập ngày hôm nay hoặc các ngày trước đó:");
+            return;
+          }
         }
 
         const lastExp = lastUserExpense.get(userId);
@@ -926,7 +1041,11 @@ export async function initExpenseTopic() {
 
         let finalValue = newValue;
         if (field === 'CATEGORY') {
-          finalValue = `[${lastExp.costType}] ${newValue}`;
+          finalValue = newValue;
+        } else if (field === 'AMOUNT') {
+          const parsed = parseAmount(newValue);
+          finalValue = parsed.sheetAmount.toString();
+          lastExp.data.displayAmount = parsed.displayAmount;
         }
 
         lastExp.data[dataKey] = finalValue;
@@ -958,16 +1077,13 @@ export async function initExpenseTopic() {
 
               if (allowedTopic.chatId && allowedTopic.threadId) {
                 const groupMsg = `✏️ **CẬP NHẬT CHI PHÍ** (bởi ${msg.from?.first_name})\n\n` +
-                  `Đã sửa **${fieldNames[field]}** thành: ${finalValue}\n` +
-                  `(Giao dịch: ${lastExp.data.category} - ${lastExp.data.amount})`;
+                  `Đã sửa **${fieldNames[field]}** thành: ${field === 'AMOUNT' ? lastExp.data.displayAmount : finalValue}\n` +
+                  `(Giao dịch: ${lastExp.data.category} - ${lastExp.data.displayAmount || lastExp.data.amount})`;
                 try {
-                  const sentMsg = await bot!.sendMessage(allowedTopic.chatId, groupMsg, {
+                  await bot!.sendMessage(allowedTopic.chatId, groupMsg, {
                     message_thread_id: allowedTopic.threadId,
                     parse_mode: 'Markdown'
                   });
-                  setTimeout(() => {
-                    bot!.deleteMessage(allowedTopic.chatId, sentMsg.message_id).catch(console.error);
-                  }, 15000);
                 } catch (e) {
                   console.error("Could not send group notification", e);
                 }
@@ -1111,7 +1227,11 @@ export async function initExpenseTopic() {
         // --- EXPENSE ENTRY FLOW ---
         case STATES.AWAITING_DATE:
           if (!text || !/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(text)) {
-            await sendMsg("Sai định dạng ngày. Vui lòng nhập lại (VD: 15/03/26):");
+            await sendMsg("Sai định dạng ngày. Vui lòng nhập lại (VD: 15/03/2026):");
+            return;
+          }
+          if (!isValidPastOrToday(text)) {
+            await sendMsg("Không được nhập ngày tương lai. Vui lòng nhập ngày hôm nay hoặc các ngày trước đó:");
             return;
           }
           session.data.date = text;
@@ -1124,7 +1244,7 @@ export async function initExpenseTopic() {
             await sendMsg("Hạng mục không được để trống. Vui lòng nhập:");
             return;
           }
-          session.data.category = `[${session.data.costType}] ${text}`;
+          session.data.category = text;
           session.state = STATES.AWAITING_AMOUNT;
           await sendMsg("Nhập Số tiền thanh toán (VD: 50.000 vnd hoặc $77):");
           return;
@@ -1134,7 +1254,9 @@ export async function initExpenseTopic() {
             await sendMsg("Số tiền không được để trống. Vui lòng nhập:");
             return;
           }
-          session.data.amount = text;
+          const parsed = parseAmount(text);
+          session.data.amount = parsed.sheetAmount;
+          session.data.displayAmount = parsed.displayAmount;
           session.state = STATES.AWAITING_UNIT;
           await sendMsg("Nhập Đơn vị đề xuất thanh toán (Bắt buộc):");
           return;
@@ -1156,12 +1278,22 @@ export async function initExpenseTopic() {
           }
           session.data.payer = text;
           session.state = STATES.AWAITING_RECEIPT;
-          await sendMsg("Vui lòng đính kèm Chứng từ tham chiếu (Gửi ảnh):");
+          await sendMsg("Vui lòng đính kèm Chứng từ tham chiếu (Gửi ảnh). Bạn có thể gửi nhiều ảnh. Khi nào xong, hãy bấm /done hoặc nút bên dưới để tiếp tục.", {
+            reply_markup: {
+              inline_keyboard: [[{ text: "✅ Đã gửi xong ảnh", callback_data: "CMD_DONE_PHOTOS" }]]
+            }
+          });
           return;
 
         case STATES.AWAITING_RECEIPT:
+          if (text === '/done' || text === '/skip') {
+            session.state = STATES.AWAITING_NOTES;
+            await sendMsg("Nhập Ghi chú (Hoặc gõ /skip để bỏ qua):");
+            return;
+          }
+
           if (!msg.photo || msg.photo.length === 0) {
-            await sendMsg("Vui lòng gửi một file ảnh làm chứng từ tham chiếu.");
+            await sendMsg("Vui lòng gửi một file ảnh làm chứng từ tham chiếu, hoặc bấm /done để tiếp tục.");
             return;
           }
 
@@ -1172,10 +1304,18 @@ export async function initExpenseTopic() {
           const response = await fetch(fileLink);
           const arrayBuffer = await response.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
-          session.data.receiptBase64 = buffer.toString('base64');
 
-          session.state = STATES.AWAITING_NOTES;
-          await sendMsg("Nhập Ghi chú (Hoặc gõ /skip để bỏ qua):");
+          if (!session.data.receiptBase64s) session.data.receiptBase64s = [];
+          if (!session.data.receiptFileIds) session.data.receiptFileIds = [];
+
+          session.data.receiptBase64s.push(buffer.toString('base64'));
+          session.data.receiptFileIds.push(photo.file_id);
+
+          await sendMsg(`Đã nhận ${session.data.receiptBase64s.length} ảnh. Bạn có thể gửi thêm ảnh, hoặc bấm nút bên dưới để hoàn tất.`, {
+            reply_markup: {
+              inline_keyboard: [[{ text: "✅ Đã gửi xong ảnh", callback_data: "CMD_DONE_PHOTOS" }]]
+            }
+          });
           return;
 
         case STATES.AWAITING_NOTES: {
@@ -1230,33 +1370,67 @@ export async function initExpenseTopic() {
 
           const successMsg = `✅ Đã lưu thành công!${gasMessage}\n\n` +
             `Tháng: ${finalData.month}\n` +
+            `Loại: ${finalData.costType}\n` +
             `Ngày: ${finalData.date}\n` +
             `Hạng mục: ${finalData.category}\n` +
-            `Số tiền: ${finalData.amount}\n` +
+            `Số tiền: ${finalData.displayAmount || finalData.amount}\n` +
             `Đơn vị: ${finalData.unit}\n` +
             `Người TT: ${finalData.payer}\n` +
             `Ghi chú: ${finalData.notes || 'Không có'}\n\n` +
             `Các tin nhắn sẽ được dọn dẹp sau 30s.`;
 
-          await sendMsg(successMsg);
+          await sendMsg(successMsg, {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "✏️ Sửa chi phí vừa nhập", callback_data: "CMD_EDIT" },
+                  { text: "🗑️ Xóa chi phí vừa nhập", callback_data: "CMD_UNDO" }
+                ],
+                [{ text: "🔙 Về Menu", callback_data: "CMD_MENU" }]
+              ]
+            }
+          });
 
           if (allowedTopic.chatId && allowedTopic.threadId) {
-            const groupMsg = `🆕 **CHI PHÍ MỚI** (bởi ${msg.from?.first_name})\n\n` +
+            const groupMsg = `🆕 **CHI PHÍ MỚI [${finalData.costType}]** (bởi ${msg.from?.first_name})\n\n` +
               `Tháng: ${finalData.month}\n` +
               `Ngày: ${finalData.date}\n` +
               `Hạng mục: ${finalData.category}\n` +
-              `Số tiền: ${finalData.amount}\n` +
+              `Số tiền: ${finalData.displayAmount || finalData.amount}\n` +
               `Đơn vị: ${finalData.unit}\n` +
               `Người TT: ${finalData.payer}\n` +
               `Ghi chú: ${finalData.notes || 'Không có'}`;
             try {
-              const sentMsg = await bot!.sendMessage(allowedTopic.chatId, groupMsg, {
-                message_thread_id: allowedTopic.threadId,
-                parse_mode: 'Markdown'
-              });
-              setTimeout(() => {
-                bot!.deleteMessage(allowedTopic.chatId, sentMsg.message_id).catch(console.error);
-              }, 15000);
+              if (finalData.receiptFileIds && finalData.receiptFileIds.length > 0) {
+                if (finalData.receiptFileIds.length === 1) {
+                  await bot!.sendPhoto(allowedTopic.chatId, finalData.receiptFileIds[0], {
+                    caption: groupMsg,
+                    message_thread_id: allowedTopic.threadId,
+                    parse_mode: 'Markdown'
+                  });
+                } else {
+                  const mediaGroup = finalData.receiptFileIds.map((fileId: string, index: number) => ({
+                    type: 'photo',
+                    media: fileId,
+                    caption: index === 0 ? groupMsg : '',
+                    parse_mode: 'Markdown'
+                  }));
+                  await bot!.sendMediaGroup(allowedTopic.chatId, mediaGroup as any, {
+                    message_thread_id: allowedTopic.threadId
+                  } as any);
+                }
+              } else if (finalData.receiptFileId) {
+                await bot!.sendPhoto(allowedTopic.chatId, finalData.receiptFileId, {
+                  caption: groupMsg,
+                  message_thread_id: allowedTopic.threadId,
+                  parse_mode: 'Markdown'
+                });
+              } else {
+                await bot!.sendMessage(allowedTopic.chatId, groupMsg, {
+                  message_thread_id: allowedTopic.threadId,
+                  parse_mode: 'Markdown'
+                });
+              }
             } catch (e) {
               console.error("Could not send group notification", e);
             }
@@ -1270,7 +1444,7 @@ export async function initExpenseTopic() {
       }
     } catch (err) {
       console.error(err);
-      await sendMsg("Đã xảy ra lỗi trong quá trình xử lý. Vui lòng thử lại bằng lệnh /menu.");
+      await sendMsg("Đã xảy ra lỗi trong quá trình xử lý. Vui lòng thử lại bằng lệnh /expense_menu.");
       session.state = STATES.IDLE;
     }
   });

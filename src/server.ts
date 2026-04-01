@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { initDB } from './db/index.ts';
 import { bot } from './bot.js';
 import { initExpenseTopic } from './bot/topics/expenseTopic.ts';
+import { initIncomeTopic } from './bot/topics/incomeTopic.ts';
 
 dotenv.config();
 
@@ -23,12 +24,15 @@ async function startServer() {
 
   if (bot) {
     bot.setMyCommands([
-      { command: '/menu', description: 'Mở Menu chính' },
+      { command: '/expense_menu', description: 'Mở Menu chính (Chi phí)' },
+      { command: '/income_menu', description: 'Mở Menu chính (Thu)' },
       { command: '/cancel', description: 'Hủy thao tác hiện tại' },
-      { command: '/set_topic', description: 'Chỉ định Topic nhập liệu (Admin)' }
+      { command: '/set_topic', description: 'Chỉ định Topic nhập liệu Chi phí (Admin)' },
+      { command: '/set_income_topic', description: 'Chỉ định Topic nhập liệu Thu (Admin)' }
     ]);
 
     await initExpenseTopic();
+    await initIncomeTopic();
     console.log("🤖 Telegram Bot is running...");
   } else {
     console.warn("⚠️ TELEGRAM_BOT_TOKEN is not set. Bot is disabled.");
