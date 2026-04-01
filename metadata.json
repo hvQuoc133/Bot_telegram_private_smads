@@ -1,0 +1,5 @@
+{
+  "name": "Telegram Bot Web App",
+  "description": "A full-stack application with a Telegram bot and a React frontend, using PostgreSQL.",
+  "requestFramePermissions": []
+}
